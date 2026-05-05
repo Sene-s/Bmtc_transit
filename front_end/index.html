@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BMTC TransitFlow </title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="/front_end/styles.css"/>
+</head>
+<body>
+
+<div id="sidebar" role="complementary" aria-label="Route planner">
+    <div class="search-area">
+        <div class="app-title">
+            <span>&#9650;</span> BMTC TransitFlow 
+        </div>
+
+        <div class="input-wrap">
+            <div class="input-icon icon-start"></div>
+            <input id="sIn" placeholder="Start stop…"
+                   autocomplete="off" aria-label="Start stop"
+                   oninput="onSearch('s')">
+        </div>
+        <div id="sList" class="dropdown" role="listbox" aria-label="Start stop suggestions"></div>
+
+        <div class="input-wrap">
+            <div class="input-icon icon-end"></div>
+            <input id="eIn" placeholder="Destination stop…"
+                   autocomplete="off" aria-label="Destination stop"
+                   oninput="onSearch('e')">
+        </div>
+        <div id="eList" class="dropdown" role="listbox" aria-label="Destination stop suggestions"></div>
+
+        <button id="find-btn" onclick="run()">Find Route</button>
+    </div>
+
+    <div id="out" role="main" aria-live="polite">
+        <div class="empty-state">
+            Enter a start and destination stop<br>to plan your BMTC journey.
+        </div>
+    </div>
+</div>
+
+<div id="map" role="region" aria-label="Route map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script src="/front_end/script.js"></script>
+</body>
+</html>
