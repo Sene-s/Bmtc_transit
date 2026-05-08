@@ -1,6 +1,6 @@
-
-const API_BASE = "https://bmtc-transit.onrender.com";
-const map = L.map('map', { zoomControl: true }).setView([12.97, 77.59], 12);
+// ── CONFIGURATION ──────────────────────────────────────────────────────────
+const API_BASE = "https://bmtc-transit.onrender.com"; // Your Render URL
+const map = L.map('map', { zoomControl: false }).setView([12.97, 77.59], 13);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
@@ -32,11 +32,9 @@ async function search(type) {
     try {
         const res = await fetch(`${API_BASE}/stops/search?q=${encodeURIComponent(q)}`);
         const data = await res.json();
-        
-        console.log(`Search results for ${q}:`, data);
         renderDropdown(type, data);
     } catch (err) {
-        console.error("Fetch failed:", err);
+        console.error("Search fetch failed:", err);
     }
 }
 
@@ -50,12 +48,16 @@ function renderDropdown(type, stops) {
         return;
     }
 
+    const seen = new Set();
     stops.forEach(s => {
-        const el = document.createElement('div');
-        el.className = 'dropdown-item';
-        el.textContent = s.name;
-        el.onclick = () => selectStop(type, s.id, s.name);
-        list.appendChild(el);
+        if (!seen.has(s.name)) {
+            const el = document.createElement('div');
+            el.className = 'dropdown-item';
+            el.textContent = s.name;
+            el.onclick = () => selectStop(type, s.id, s.name);
+            list.appendChild(el);
+            seen.add(s.name);
+        }
     });
     list.classList.add('open');
 }
@@ -72,130 +74,107 @@ document.addEventListener('click', e => {
     }
 });
 
-// ── ROUTING LOGIC ──────────────────────────────────────────────────────────
 async function run() {
-    if (!sId || !eId) {
-        alert("Please select both stops from the dropdown lists.");
-        return;
-    }
-
-    const btn = document.getElementById('find-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>Finding route…';
-    document.getElementById('out').innerHTML = '';
-
-    clearMapLayers();
+    if (!sId || !eId) return alert("Select stops from dropdown first!");
+    
+    const outDiv = document.getElementById('out');
+    outDiv.innerHTML = '<div style="padding:20px; color:#aaa;">Calculating fastest path...</div>';
 
     try {
-        const res = await fetch(`${API_BASE}/route?start=${encodeURIComponent(sId)}&end=${encodeURIComponent(eId)}`);
+        // FIXED: Now uses API_BASE instead of localhost
+        const res = await fetch(`${API_BASE}/route?start=${sId}&end=${eId}`);
         const data = await res.json();
 
         if (data.error) {
-            renderError(data.error, data.suggestions);
-        } else {
-            renderResult(data);
-            drawRoute(data.legs);
+            outDiv.innerHTML = `<div style="padding:20px; color:#ff4d4d; font-weight:bold;">❌ ${data.error}</div>`;
+            return; 
         }
-    } catch (err) {
-        renderError('Could not reach the server. Is the backend running on Render?');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Find Route';
+
+        renderResult(data);
+        drawRoute(data);
+
+    } catch (e) {
+        console.error("Routing failed:", e);
+        outDiv.innerHTML = `<div style="padding:20px; color:red;">❌ Server unreachable. Checking connection...</div>`;
     }
-}
-
-function clearMapLayers() {
-    routeLayers.forEach(l => map.removeLayer(l));
-    routeLayers = [];
-}
-
-function drawRoute(legs) {
-    const allCoords = [];
-
-    legs.forEach(leg => {
-        const coords = leg.stops.map(s => [s.lat, s.lng]);
-        allCoords.push(...coords);
-
-        const isBus = leg.type === 'bus';
-        const line = L.polyline(coords, {
-            color: isBus ? '#22c55e' : '#f59e0b',
-            weight: isBus ? 6 : 4,
-            opacity: 0.9,
-            dashArray: isBus ? null : '8 12',
-        }).addTo(map);
-        routeLayers.push(line);
-
-        leg.stops.forEach((s, i) => {
-            const isTerminal = (i === 0 || i === leg.stops.length - 1);
-            const m = L.circleMarker([s.lat, s.lng], {
-                radius: isTerminal ? 7 : 4,
-                color: isBus ? '#22c55e' : '#f59e0b',
-                weight: 2,
-                fillColor: isTerminal ? '#fff' : (isBus ? '#22c55e' : '#f59e0b'),
-                fillOpacity: 1,
-            }).addTo(map);
-            m.bindTooltip(s.name);
-            routeLayers.push(m);
-        });
-    });
-
-    if (allCoords.length) {
-        map.fitBounds(L.latLngBounds(allCoords), { padding: [50, 50] });
-    }
-}
-
-// ── UI RENDERING ──────────────────────────────────────────────────────────
-function renderError(msg, suggestions) {
-    let html = `<div class="error-msg">${escHtml(msg)}</div>`;
-    if (suggestions && suggestions.length) {
-        html += `<div style="font-size:12px;color:#888;margin-bottom:8px;">Try searching for:</div>`;
-        html += suggestions.map(s =>
-            `<div class="dropdown-item" style="border:1px solid #333; border-radius:8px; margin-bottom:5px;"
-                  onclick="prefillStop('${escAttr(s.id)}','${escAttr(s.name)}')">${escHtml(s.name)}</div>`
-        ).join('');
-    }
-    document.getElementById('out').innerHTML = html;
 }
 
 function renderResult(data) {
-    const summaryHtml = `
-        <div class="summary">
-            <div class="stat-card">
-                <div class="stat-value">${Math.round(data.total_time)}</div>
-                <div class="stat-label">Mins</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.total_stops}</div>
-                <div class="stat-label">Stops</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.transfers || 0}</div>
-                <div class="stat-label">Changes</div>
-            </div>
-        </div>`;
+    const out = document.getElementById('out');
+    const firstLeg = data.legs[0];
+    const lastLeg = data.legs[data.legs.length - 1];
 
-    const legsHtml = data.legs.map((leg, idx) => {
-        const isLast = idx === data.legs.length - 1;
-        const isBus = leg.type === 'bus';
-        const dotColor = isLast ? 'dot-dest' : (isBus ? 'dot-bus' : 'dot-walk');
-        
-        return `
-            <div class="leg-card">
-                <div class="leg-dot ${dotColor}"></div>
-                <div class="leg-body">
-                    <div class="leg-from">${escHtml(leg.stops[0].name)}</div>
-                    <div class="leg-meta">
-                        <span class="${isBus ? 'route-badge' : 'walk-badge'}">
-                            ${isBus ? '🚌 ' + escHtml(leg.route_short_name || 'Bus') : '🚶 Walk'}
-                        </span>
-                        <span style="font-size:12px; color:#666">${leg.stops.length} stops</span>
+    let html = `
+        <div class="route-header">
+            <div class="route-number">${firstLeg.route || 'Bus'}</div>
+            <div class="route-title">
+                ${firstLeg.stops[0].name} ⇌ <br>
+                ${lastLeg.stops[lastLeg.stops.length-1].name}
+            </div>
+        </div>
+        <div class="summary-bar">
+            <div class="stat-card"><div class="stat-value">${data.total_time}</div><div class="stat-label">Mins</div></div>
+            <div class="stat-card"><div class="stat-value">${data.total_stops}</div><div class="stat-label">Stops</div></div>
+            <div class="stat-card"><div class="stat-value">${data.transfers || 0}</div><div class="stat-label">Transfers</div></div>
+        </div>
+        <div class="timeline-container">
+    `;
+
+    data.legs.forEach(leg => {
+        leg.stops.forEach((stop, i) => {
+            const isFirst = i === 0;
+            html += `
+                <div class="stop-row">
+                    <div style="font-weight:${isFirst ? 'bold' : 'normal'}; color:${isFirst ? '#fff' : '#ccc'}">
+                        ${stop.name}
+                        ${isFirst && leg.type === 'bus' ? `<br><span class="route-badge">BUS ${leg.route}</span>` : ''}
+                        ${isFirst && leg.type === 'walk' ? `<br><span class="route-badge" style="background:#ffc107">🚶 Walk</span>` : ''}
                     </div>
-                    ${!isLast ? `<div style="font-size:12px; color:#555">Get off at ${escHtml(leg.stops[leg.stops.length-1].name)}</div>` : ''}
-                </div>
-            </div>`;
-    }).join('');
+                </div>`;
+        });
+    });
 
-    document.getElementById('out').innerHTML = summaryHtml + legsHtml;
+    html += `</div>`;
+    out.innerHTML = html;
+}
+
+async function drawRoute(data) {
+    routeLayers.forEach(layer => map.removeLayer(layer));
+    routeLayers = [];
+
+    const allStops = data.legs.flatMap(leg => leg.stops);
+    
+    for (const leg of data.legs) {
+        const color = leg.type === 'bus' ? '#22c55e' : '#ffc107';
+        
+        const coordsStr = leg.stops.map(s => `${s.lng},${s.lat}`).join(';');
+        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+
+        try {
+            const res = await fetch(osrmUrl);
+            const rData = await res.json();
+            const coords = rData.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+            const poly = L.polyline(coords, { color: color, weight: 6, opacity: 0.8 }).addTo(map);
+            routeLayers.push(poly);
+        } catch (e) {
+
+            const line = L.polyline(leg.stops.map(s => [s.lat, s.lng]), { color: color, weight: 4, dashArray: '5,10' }).addTo(map);
+            routeLayers.push(line);
+        }
+    }
+
+    allStops.forEach((stop, i) => {
+        const isEnd = i === 0 || i === allStops.length - 1;
+        const m = L.circleMarker([stop.lat, stop.lng], {
+            radius: isEnd ? 7 : 4,
+            fillColor: i === 0 ? '#22c55e' : (i === allStops.length - 1 ? '#f97316' : '#fff'),
+            color: '#000', weight: 2, fillOpacity: 1
+        }).addTo(map);
+        m.bindTooltip(stop.name);
+        routeLayers.push(m);
+    });
+
+    map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] });
 }
 
 function prefillStop(id, name) {
@@ -206,6 +185,7 @@ function prefillStop(id, name) {
 function escHtml(str) {
     return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
 function escAttr(str) {
     return String(str ?? '').replace(/"/g, '&quot;');
 }
