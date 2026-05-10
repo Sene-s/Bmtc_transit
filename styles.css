@@ -196,3 +196,17 @@ button {
 }
 button:active { transform: scale(0.98); }
 button:hover { background: #1eb054; }
+
+.fav-item {
+    background: #1a1a1a;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    border: 1px solid #333;
+}
+.fav-item span { cursor: pointer; flex-grow: 1; }
+.fav-item span:hover { color: #22c55e; }

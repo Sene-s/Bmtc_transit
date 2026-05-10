@@ -1,4 +1,4 @@
-// ── CONFIGURATION ──────────────────────────────────────────────────────────
+
 const API_BASE = "https://bmtc-transit.onrender.com"; // Your Render URL
 const map = L.map('map', { zoomControl: false }).setView([12.97, 77.59], 13);
 
@@ -172,10 +172,51 @@ async function drawRoute(data) {
         }).addTo(map);
         m.bindTooltip(stop.name);
         routeLayers.push(m);
+
     });
+ 
 
     map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] });
 }
+
+
+async function loadFavorites() {
+    const res = await fetch(`${API_BASE}/favorites`);
+    const favorites = await res.json();
+    
+    const container = document.getElementById('favorites-list');
+    if (favorites.length === 0) {
+        container.innerHTML = '<small style="color:#666">No bookmarks yet</small>';
+        return;
+    }
+
+    container.innerHTML = favorites.map(f => `
+        <div class="fav-item">
+            <span onclick="setFromFav('${f.stop_id}', '${f.stops.stop_name}')">${f.stops.stop_name}</span>
+            <button onclick="toggleFav('${f.stop_id}', true)" style="background:none; border:none; color:#ff4d4d; cursor:pointer;">×</button>
+        </div>
+    `).join('');
+}
+
+async function toggleFav(sid, isDelete = false) {
+    const method = isDelete ? 'DELETE' : 'POST';
+    const res = await fetch(`${API_BASE}/favorites/${sid}`, { method: method });
+    const data = await res.json();
+    console.log(data.message);
+    loadFavorites(); // Refresh list
+}
+
+function setFromFav(id, name) {
+    if (!sId) {
+        sId = id;
+        document.getElementById('sIn').value = name;
+    } else {
+        eId = id;
+        document.getElementById('eIn').value = name;
+    }
+}
+
+
 
 function prefillStop(id, name) {
     if (!sId) { sId = id; document.getElementById('sIn').value = name; }
