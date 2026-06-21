@@ -17,16 +17,16 @@ def haversine_dist(p1, p2):
         return 2 * asin(sqrt(a)) * 6371
     except: return 999
 
-CACHE_FILE = "graph_cache_v_FINAL_REVISED.msgpack"
+# CHANGED: New filename forces Render to ignore the old, possibly broken cache
+CACHE_FILE = "graph_cache_v_REBUILD_APRIL.msgpack"
 TRANSFER_PENALTY = 5
 WALK_SPEED_KM_PER_MIN = 0.08
-WALK_RADIUS_KM = 1.5
+WALK_RADIUS_KM = 1.5 
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 class TransitEngine:
-    # FIXED: Renamed 'init' to '__init__' so attributes are actually created on instantiation
     def __init__(self, url: str, key: str):
         self.url = url
         self.key = key
@@ -38,36 +38,51 @@ class TransitEngine:
         self.supabase: Optional[AsyncClient] = None
 
     async def initialize(self):  
-        log.info("Connecting to Supabase...")
+        log.info("🔌 Starting Engine Initialization...")
         self.supabase = await acreate_client(self.url, self.key)
 
         if os.path.exists(CACHE_FILE):  
             try:
-                log.info("Loading Graph from Cache...")
+                log.info(f"📦 Loading cache: {CACHE_FILE}")
                 self._load_cache()  
             except Exception as e:
                 log.warning(f"Cache failed: {e}. Rebuilding...")
                 await self._build()  
                 self._save_cache()  
         else:  
-            log.info("Fresh build started...")
+            log.info("🏗️ Fresh build: Fetching data from Supabase...")
             await self._build()  
             self._save_cache()  
 
         self._build_name_index()  
-        log.info("ENGINE READY.")
+        log.info(f"✅ ENGINE READY: {len(self.stop_details)} stops loaded into memory.")
 
     async def _build(self):  
         offset = 0  
+        skipped_coords = 0
         while True:  
             res = await self.supabase.table("stops").select("stop_id,stop_name,stop_lat,stop_lon").range(offset, offset + 999).execute()  
             if not res.data: break  
             for s in res.data:
-                if s.get("stop_lat") and s.get("stop_lon"):
+                # CRITICAL CHECK: Log if stops are being skipped
+                lat, lon = s.get("stop_lat"), s.get("stop_lon")
+                if lat and lon and float(lat) != 0:
                     sid = str(s["stop_id"]).strip()
-                    self.stop_details[sid] = {"name": s["stop_name"], "lat": float(s["stop_lat"]), "lng": float(s["stop_lon"])}
+                    self.stop_details[sid] = {
+                        "name": s["stop_name"], 
+                        "lat": float(lat), 
+                        "lng": float(lon)
+                    }
+                else:
+                    skipped_coords += 1
+                    # Debug specifically for the missing stops
+                    if "kengeri" in s["stop_name"].lower() or "kumbalagodu" in s["stop_name"].lower():
+                        log.error(f"❌ DATA ERROR: {s['stop_name']} has NO COORDINATES and is being ignored!")
+            
             if len(res.data) < 1000: break
             offset += 1000
+        
+        log.info(f"Finished loading stops. Total: {len(self.stop_details)}, Skipped (no coords): {skipped_coords}")
 
         sids = list(self.stop_details.keys())
         self.G.add_vertices(len(sids))
@@ -86,6 +101,7 @@ class TransitEngine:
                     weights.append(float(e["weight"]))
                     routes.append(e.get("route_id"))
                     names.append(e.get("route_short_name", "Bus"))
+            
             self.G.add_edges(edges)
             n = len(edges)
             self.G.es[-n:]["weight"] = weights
@@ -97,18 +113,22 @@ class TransitEngine:
         self._add_walking_mesh()
 
     def _add_walking_mesh(self):
+        log.info("🚶 Generating walking mesh...")
         sids = list(self.stop_details.keys())
         coords = [(self.stop_details[s]["lat"], self.stop_details[s]["lng"]) for s in sids]
+        if not coords: return
         tree = KDTree(coords)
         walk_edges, walk_weights = [], []
+        
         for i in range(len(sids)):
-            dists, idxs = tree.query(coords[i], k=6)
+            dists, idxs = tree.query(coords[i], k=8)
             for j in idxs[1:]:
                 real_d = haversine_dist(coords[i], coords[j])
                 if real_d <= WALK_RADIUS_KM:
                     w = real_d / WALK_SPEED_KM_PER_MIN
                     walk_edges += [(i, j), (j, i)]
                     walk_weights += [w, w]
+        
         n = len(walk_edges)
         self.G.add_edges(walk_edges)
         self.G.es[-n:]["weight"] = walk_weights
@@ -118,7 +138,7 @@ class TransitEngine:
 
     def find_route(self, start: str, end: str):
         if start not in self._node_index or end not in self._node_index:
-            return {"error": "Stops not found."}
+            return {"error": "Stops not found. Ensure they exist in search suggestions."}
         si, ei = self._node_index[start], self._node_index[end]
         queue = [(0.0, 0.0, si, None, [])]
         visited = {}
@@ -136,7 +156,7 @@ class TransitEngine:
                 h = haversine_dist((self.stop_details[self.G.vs[v]['sid']]['lat'], self.stop_details[self.G.vs[v]['sid']]['lng']), 
                                    (self.stop_details[self.G.vs[ei]['sid']]['lat'], self.stop_details[self.G.vs[ei]['sid']]['lng'])) / 0.8
                 heapq.heappush(queue, (new_c + h, new_c, v, r if edge["type"] == "bus" else prev_r, path + [u]))
-        return {"error": "No route found."}
+        return {"error": "No path found."}
 
     def _format(self, path, total):
         legs = []
@@ -151,16 +171,25 @@ class TransitEngine:
             curr["stops"].append({**self.stop_details[sid], "id": sid})
         legs.append(curr)
         bus_legs = [l for l in legs if l["type"] == "bus"]
-        return {"legs": legs, "total_time": round(total, 1), "total_stops": len(path), "transfers": max(0, len(bus_legs) - 1)}
+        return {"legs": legs, "total_time": round(total, 1), "total_stops": len(path), "transfers": max(0, len(bus_legs)-1)}
 
     def search_stops(self, q: str):
         query = q.lower().strip()
-        matches = []
+        prefix = []
+        substring = []
+
         for name in self.stop_names_list:
-            if query in name.lower():
-                for sid in self.name_to_ids[name]: matches.append({"id": sid, "name": name})
-            if len(matches) >= 10: break
-        return matches
+            lname = name.lower()
+            if lname.startswith(query):
+                for sid in self.name_to_ids[name]:
+                    prefix.append({"id": sid, "name": name})
+            elif query in lname:
+                for sid in self.name_to_ids[name]:
+                    substring.append({"id": sid, "name": name})
+            
+            if len(prefix) + len(substring) >= 40: break
+            
+        return (prefix + substring)[:20]
 
     def _build_name_index(self):
         self.name_to_ids = {}
