@@ -25,34 +25,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── DIAGNOSTIC ENDPOINTS ──
-
-@app.get("/debug/memory-search/{q}")
-async def debug_memory(q: str):
-    """Bypasses ranking and limits to see exactly what is in the engine memory"""
-    matches = []
-    q_low = q.lower()
-    for sid, details in engine.stop_details.items():
-        if q_low in details["name"].lower():
-            matches.append({"id": sid, "name": details["name"], "coords": f"{details['lat']},{details['lng']}"})
-    return {"count": len(matches), "results": matches[:100]}
-
-@app.get("/debug/connectivity/{sid}")
-async def debug_conn(sid: str):
-    if sid not in engine._node_index: return {"error": "Stop ID not in memory"}
-    idx = engine._node_index[sid]
-    outgoing = engine.G.incident(idx, mode="out")
-    return {
-        "name": engine.stop_details[sid]["name"],
-        "bus_paths": len([e for e in outgoing if engine.G.es[e]["type"] == "bus"]),
-        "walk_paths": len([e for e in outgoing if engine.G.es[e]["type"] == "walk"])
-    }
-
-# ── STANDARD ROUTES ──
+def get_db():
+    if engine.supabase is None:
+        raise HTTPException(status_code=503, detail="Database initializing...")
+    return engine.supabase
 
 @app.get("/")
 async def root():
-    return {"status": "online", "stops_in_memory": len(engine.stop_details)}
+    return {"status": "online", "stops_loaded": len(engine.stop_details)}
 
 @app.get("/stops/search")
 async def search(q: str):
@@ -62,22 +42,47 @@ async def search(q: str):
 async def route(start: str, end: str):
     return engine.find_route(start, end)
 
-# ── FAVORITES (CRUD) ──
+# ── FAVORITES (FULL CRUD FOR DBMS PROJECT) ──
 
 @app.get("/favorites")
-async def get_favorites():
-    if not engine.supabase: raise HTTPException(503, "DB busy")
-    res = await engine.supabase.table("user_favorites").select("id, stop_id, nickname, stops(stop_name)").execute()
+async def get_favorites(db = Depends(get_db)):
+    # Read: Get all favorites with stop details
+    res = await db.table("user_favorites") \
+        .select("id, stop_id, nickname, stops(stop_name)") \
+        .execute()
     return res.data
 
-@app.post("/favorites/{sid}")
-async def add_favorite(sid: str, nickname: Optional[str] = Query(None)):
+@app.post("/favorites/{sid}", status_code=201)
+async def add_favorite(sid: str, nickname: Optional[str] = Query(None), db = Depends(get_db)):
+    # Create: Validate stop existence before adding
+    if sid not in engine.stop_details:
+        raise HTTPException(404, "Stop ID not found in current dataset")
+    
+    check = await db.table("user_favorites").select("*").eq("stop_id", sid).execute()
+    if check.data:
+        return {"message": "Already in favorites"}
+
     payload = {"stop_id": sid}
-    if nickname: payload["nickname"] = nickname.strip()[:30]
-    await engine.supabase.table("user_favorites").insert(payload).execute()
-    return {"message": "Added"}
+    if nickname:
+        payload["nickname"] = nickname.strip()[:30]
+    
+    await db.table("user_favorites").insert(payload).execute()
+    return {"message": "Created"}
+
+@app.put("/favorites/{sid}")
+async def update_favorite(sid: str, nickname: str = Query(...), db = Depends(get_db)):
+    # Update: Modify the nickname of an existing favorite
+    if not nickname.strip():
+        raise HTTPException(400, "Nickname cannot be empty")
+        
+    await db.table("user_favorites") \
+        .update({"nickname": nickname.strip()[:30]}) \
+        .eq("stop_id", sid) \
+        .execute()
+    return {"message": "Updated"}
 
 @app.delete("/favorites/{sid}")
-async def remove_favorite(sid: str):
-    await engine.supabase.table("user_favorites").delete().eq("stop_id", sid).execute()
+async def remove_favorite(sid: str, db = Depends(get_db)):
+    # Delete: Remove favorite record
+    await db.table("user_favorites").delete().eq("stop_id", sid).execute()
     return {"message": "Deleted"}
