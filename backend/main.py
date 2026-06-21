@@ -4,9 +4,13 @@ from fastapi.responses import JSONResponse
 from backend.graph_engine import TransitEngine
 from contextlib import asynccontextmanager
 import os
-import traceback
+import logging
 from typing import Optional
 from dotenv import load_dotenv
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 engine = TransitEngine(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
@@ -18,7 +22,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Standard Production CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,12 +30,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# FIXED: This ensures that even if the code crashes (500), CORS headers are sent
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"GLOBAL CRASH: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"message": "Internal Server Error", "detail": str(exc), "traceback": traceback.format_exc()},
+        content={"message": "Internal Server Error", "detail": str(exc)},
         headers={"Access-Control-Allow-Origin": "*"}
     )
 
@@ -51,8 +54,6 @@ async def search(q: str):
 @app.get("/route")
 async def route(start: str, end: str):
     return await engine.find_route(start, end)
-
-# ── FAVORITES ──
 
 @app.get("/favorites")
 async def get_favorites(db = Depends(get_db)):

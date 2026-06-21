@@ -17,7 +17,7 @@ def haversine_dist(p1, p2):
         return 2 * asin(sqrt(a)) * 6371
     except: return 999
 
-CACHE_FILE = "graph_cache_v_RECOVERY.msgpack"
+CACHE_FILE = "graph_cache_v_PROD_FINAL.msgpack"
 TRANSFER_PENALTY = 10
 WALK_SPEED_KM_PER_MIN = 0.08
 WALK_RADIUS_KM = 1.2
@@ -27,27 +27,18 @@ log = logging.getLogger(__name__)
 
 class TransitEngine:
     def __init__(self, url: str, key: str):
-        self.url = url
-        self.key = key
+        self.url, self.key = url, key
         self.G = ig.Graph(directed=True)
-        self.stop_details = {}
-        self.name_to_ids = {}
-        self.stop_names_list = []
-        self._node_index = {}
+        self.stop_details, self.name_to_ids, self.stop_names_list, self._node_index = {}, {}, [], {}
         self.supabase: Optional[AsyncClient] = None
 
     async def initialize(self):  
         self.supabase = await acreate_client(self.url, self.key)
         if os.path.exists(CACHE_FILE):  
             try: self._load_cache()
-            except: 
-                await self._build()
-                self._save_cache()
-        else:
-            await self._build()
-            self._save_cache()
+            except: await self._build(); self._save_cache()
+        else: await self._build(); self._save_cache()
         self._build_name_index()
-        log.info(f"✅ ENGINE READY: {len(self.stop_details)} stops.")
 
     async def _build(self):  
         offset = 0  
@@ -107,37 +98,35 @@ class TransitEngine:
             self.G.es[-n:]["route_id"], self.G.es[-n:]["route_short_name"] = [None]*n, [None]*n
 
     async def expand_leg(self, route_name, s_id, t_id):
-        """Attempts to fetch intermediate stops. Falls back to empty list on any error."""
+        if not self.supabase: return []
         try:
-            # 1. Get route_id
-            res = await self.supabase.table("graph_edges").select("route_id").eq("route_short_name", route_name).limit(1).execute()
-            if not res.data: return []
-            rid = res.data[0]["route_id"]
+            # Step 1: Find route_id
+            r_res = await self.supabase.table("graph_edges").select("route_id").eq("route_short_name", route_name).limit(1).execute()
+            if not r_res.data: return []
+            rid = r_res.data[0]["route_id"]
 
-            # 2. Get trip_id
-            res = await self.supabase.table("trips").select("trip_id").eq("route_id", rid).limit(1).execute()
-            if not res.data: return []
-            tid = res.data[0]["trip_id"]
+            # Step 2: Find any trip for this route
+            t_res = await self.supabase.table("trips").select("trip_id").eq("route_id", rid).limit(1).execute()
+            if not t_res.data: return []
+            tid = t_res.data[0]["trip_id"]
 
-            # 3. Get intermediate stops via Join
-            res = await self.supabase.table("stop_times").select("stop_id, stop_sequence, stops(stop_name, stop_lat, stop_lon)").eq("trip_id", tid).order("stop_sequence").execute()
-            rows = res.data
+            # Step 3: Get full stop sequence
+            st_res = await self.supabase.table("stop_times").select("stop_id, stop_sequence, stops(stop_name, stop_lat, stop_lon)").eq("trip_id", tid).order("stop_sequence").execute()
+            rows = st_res.data
             
-            s_seq, t_seq = None, None
-            for r in rows:
-                if str(r["stop_id"]) == str(s_id): s_seq = r["stop_sequence"]
-                if str(r["stop_id"]) == str(t_id): t_seq = r["stop_sequence"]
+            s_seq = next((r["stop_sequence"] for r in rows if str(r["stop_id"]) == str(s_id)), None)
+            t_seq = next((r["stop_sequence"] for r in rows if str(r["stop_id"]) == str(t_id)), None)
 
             if s_seq is None or t_seq is None or s_seq >= t_seq: return []
 
-            def extract(r):
-                st = r["stops"]
-                if isinstance(st, list): st = st[0]
-                return {"id": str(r["stop_id"]), "name": st["stop_name"], "lat": float(st["stop_lat"]), "lng": float(st["stop_lon"])}
+            def clean(r):
+                s = r["stops"]
+                if isinstance(s, list): s = s[0]
+                return {"id": str(r["stop_id"]), "name": s["stop_name"], "lat": float(s["stop_lat"]), "lng": float(s["stop_lon"])}
 
-            return [extract(r) for r in rows if s_seq <= r["stop_sequence"] <= t_seq]
+            return [clean(r) for r in rows if s_seq <= r["stop_sequence"] <= t_seq]
         except Exception as e:
-            log.error(f"Expansion failed (Normal if tables missing): {e}")
+            log.error(f"Expand error: {e}")
             return []
 
     async def find_route(self, start: str, end: str):
@@ -162,34 +151,39 @@ class TransitEngine:
     async def _format(self, path, total):
         legs = []
         curr = {"type": None, "route": None, "stops": []}
+        
         for i in range(len(path)):
             sid = self.G.vs[path[i]]["sid"]
             if i < len(path) - 1:
                 edge = self.G.es[self.G.get_eid(path[i], path[i+1])]
-                if edge["type"] != curr["type"] or (edge["type"] == "bus" and edge["route_short_name"] != curr["route"]):
+                etype, rname = edge["type"], edge["route_short_name"]
+                
+                if etype != curr["type"] or (etype == "bus" and rname != curr["route"]):
                     if curr["stops"]:
                         if curr["type"] == "bus":
                             expanded = await self.expand_leg(curr["route"], curr["stops"][0]["id"], curr["stops"][-1]["id"])
                             if expanded: curr["stops"] = expanded
-                        legs.append(curr.copy())
-                    curr = {"type": edge["type"], "route": edge["route_short_name"], "stops": []}
+                        legs.append(dict(curr)) # Use dict() for a fresh copy
+                    curr = {"type": etype, "route": rname, "stops": []}
+            
             curr["stops"].append({**self.stop_details[sid], "id": sid})
         
         if curr["type"] == "bus":
             expanded = await self.expand_leg(curr["route"], curr["stops"][0]["id"], curr["stops"][-1]["id"])
             if expanded: curr["stops"] = expanded
         legs.append(curr)
+        
         bus_legs = [l for l in legs if l["type"] == "bus"]
         return {"legs": legs, "total_time": round(total, 1), "total_stops": sum(len(l["stops"]) for l in legs), "transfers": max(0, len(bus_legs)-1)}
 
     def search_stops(self, q: str):
         query = q.lower().strip()
-        results = []
+        res = []
         for name in self.stop_names_list:
             if query in name.lower():
-                for sid in self.name_to_ids[name]: results.append({"id": sid, "name": name})
-        results.sort(key=lambda x: (not x["name"].lower().startswith(query), x["name"]))
-        return results[:20]
+                for sid in self.name_to_ids[name]: res.append({"id": sid, "name": name})
+        res.sort(key=lambda x: (not x["name"].lower().startswith(query), x["name"]))
+        return res[:20]
 
     def _build_name_index(self):
         self.name_to_ids = {}
@@ -198,7 +192,7 @@ class TransitEngine:
         self.stop_names_list = list(self.name_to_ids.keys())
 
     def _save_cache(self):
-        edge_data = [(e.source, e.target, e["weight"], e["type"], e["route_id"], e["route_short_name"]) for e in self.G.es]
+        edge_data = [(e.source, e.target, e["weight"], e["type"], e[ "route_id"], e["route_short_name"]) for e in self.G.es]
         data = {"stop_details": self.stop_details, "sids": self.G.vs["sid"], "edges": edge_data}
         with open(CACHE_FILE, "wb") as f: f.write(msgpack.packb(data, use_bin_type=True))
 
