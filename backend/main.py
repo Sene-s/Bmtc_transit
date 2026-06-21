@@ -1,8 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from backend.graph_engine import TransitEngine
 from contextlib import asynccontextmanager
 import os
+import traceback
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -16,6 +18,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Standard Production CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,8 +27,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# FIXED: This ensures that even if the code crashes (500), CORS headers are sent
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"message": "Internal Server Error", "detail": str(exc), "traceback": traceback.format_exc()},
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
 def get_db():
-    if engine.supabase is None: raise HTTPException(status_code=503, detail="Initializing")
+    if engine.supabase is None: raise HTTPException(status_code=503)
     return engine.supabase
 
 @app.get("/")
@@ -38,30 +50,23 @@ async def search(q: str):
 
 @app.get("/route")
 async def route(start: str, end: str):
-    # FIXED: find_route is now async
     return await engine.find_route(start, end)
 
-# ── FAVORITES (CRUD) ──
+# ── FAVORITES ──
 
 @app.get("/favorites")
 async def get_favorites(db = Depends(get_db)):
     res = await db.table("user_favorites").select("id, stop_id, nickname, stops(stop_name)").execute()
     return res.data
 
-@app.post("/favorites/{sid}", status_code=201)
+@app.post("/favorites/{sid}")
 async def add_favorite(sid: str, nickname: Optional[str] = Query(None), db = Depends(get_db)):
-    if sid not in engine.stop_details: raise HTTPException(404)
     check = await db.table("user_favorites").select("*").eq("stop_id", sid).execute()
     if check.data: return {"message": "Exists"}
     payload = {"stop_id": sid}
     if nickname: payload["nickname"] = nickname.strip()[:30]
     await db.table("user_favorites").insert(payload).execute()
     return {"message": "Saved"}
-
-@app.put("/favorites/{sid}")
-async def update_favorite(sid: str, nickname: str = Query(...), db = Depends(get_db)):
-    await db.table("user_favorites").update({"nickname": nickname.strip()[:30]}).eq("stop_id", sid).execute()
-    return {"message": "Updated"}
 
 @app.delete("/favorites/{sid}")
 async def remove_favorite(sid: str, db = Depends(get_db)):
