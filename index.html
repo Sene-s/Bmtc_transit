@@ -1,55 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>BMTC TransitFlow </title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-    <link rel="stylesheet" href="styles.css"/>
-</head>
-<body>
-
-<div id="sidebar" role="complementary" aria-label="Route planner">
-    <div class="search-area">
-        <div class="app-title">
-            <span>&#9650;</span> BMTC TransitFlow 
+<html lang="en">  
+<head>  
+    <meta charset="UTF-8" />  
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />  
+    <title>BMTC TransitFlow</title>  
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />  
+    <link rel="stylesheet" href="styles.css"/>  
+</head>  
+<body>  
+    <div id="sidebar">  
+        <div class="search-area">  
+            <div style="font-size:14px; font-weight:900; color:#22c55e; margin-bottom:15px; letter-spacing:1px;">BMTC TRANSITFLOW</div>
+            <div class="input-wrap">  
+                <div class="input-icon icon-start"></div>  
+                <input id="sIn" placeholder="Start stop..." oninput="onSearch('s')" autocomplete="off">  
+                <div id="sList" class="dropdown"></div>  
+            </div>  
+            <div class="input-wrap">  
+                <div class="input-icon icon-end"></div>  
+                <input id="eIn" placeholder="Destination stop..." oninput="onSearch('e')" autocomplete="off">  
+                <div id="eList" class="dropdown"></div>  
+            </div>  
+            <button id="find-btn" onclick="run()">Find Route</button>  
+        </div>  
+        <div id="out">
+            <div style="padding:40px; text-align:center; color:#444;">Select stops to plan route.</div>
         </div>
-
-        <div class="input-wrap">
-            <div class="input-icon icon-start"></div>
-            <input id="sIn" placeholder="Start stop…"
-                   autocomplete="off" aria-label="Start stop"
-                   oninput="onSearch('s')">
-        </div>
-        <div id="sList" class="dropdown" role="listbox" aria-label="Start stop suggestions"></div>
-
-        <div class="input-wrap">
-            <div class="input-icon icon-end"></div>
-            <input id="eIn" placeholder="Destination stop…"
-                   autocomplete="off" aria-label="Destination stop"
-                   oninput="onSearch('e')">
-        </div>
-        <div id="eList" class="dropdown" role="listbox" aria-label="Destination stop suggestions"></div>
-
-        <button id="find-btn" onclick="run()">Find Route</button>
-    </div>
-
-    <div id="out" role="main" aria-live="polite">
-        <div class="empty-state">
-            Enter a start and destination stop<br>to plan your BMTC journey.
-        </div>
-    </div>
-</div>
-
-<div id="map" role="region" aria-label="Route map"></div>
-<div style="margin-top:25px;">
-    <h4 style="margin-bottom:10px; color:#22c55e;">⭐ Bookmarked Spots</h4>
-    <div id="favorites-list">
-       
-    </div>
-</div>
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
-<script src="script.js"></script>
-</body>
+        <div style="font-size:10px; color:#22c55e; padding:10px 20px 0 20px; font-weight:bold; letter-spacing:1px;">BOOKMARKS</div>
+        <div id="favorites-list"></div>
+    </div>  
+    <div id="map"></div>  
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>  
+    <script src="script.js"></script>  
+</body>  
 </html>

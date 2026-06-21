@@ -1,23 +1,18 @@
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from backend.graph_engine import TransitEngine
 from contextlib import asynccontextmanager
 import os
+from typing import Optional
 from dotenv import load_dotenv
-from pydantic import BaseModel
 
 load_dotenv()
 
 engine = TransitEngine(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-# ── SECURITY: Verify Token ──
-async def verify_admin(x_admin_token: str = Header(None)):
-    if x_admin_token != os.getenv("ADMIN_SECRET_KEY"):
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid Admin Token")
-    return True
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize the engine (including Supabase client)
     await engine.initialize()
     yield
 
@@ -26,18 +21,17 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class StopModel(BaseModel):
-    stop_id: str
-    stop_name: str
-    stop_lat: float
-    stop_lon: float
+# Helper to verify DB is initialized
+def get_db():
+    if engine.supabase is None:
+        raise HTTPException(status_code=503, detail="Database initializing...")
+    return engine.supabase
 
-# ── PUBLIC ROUTES ──
 @app.get("/")
 async def root():
     return {"status": "online", "stops": len(engine.stop_details)}
@@ -50,27 +44,42 @@ async def search(q: str):
 async def route(start: str, end: str):
     return engine.find_route(start, end)
 
-# ── FAVORITES ROUTES ──
+# ── FAVORITES (CRUD) ──
 
 @app.get("/favorites")
-async def get_favorites():
-    # Join with stops table to get the names/coords of favorites
-    res = engine.supabase.table("user_favorites") \
-        .select("id, stop_id, stops(stop_name, stop_lat, stop_lon)") \
+async def get_favorites(db = Depends(get_db)):
+    # FIXED: Must await asynchronous database calls
+    res = await db.table("user_favorites") \
+        .select("id, stop_id, nickname, stops(stop_name, stop_lat, stop_lon)") \
         .execute()
     return res.data
 
 @app.post("/favorites/{sid}")
-async def add_favorite(sid: str):
-
-    check = engine.supabase.table("user_favorites").select("*").eq("stop_id", sid).execute()
+async def add_favorite(sid: str, nickname: Optional[str] = Query(None), db = Depends(get_db)):
+    # FIXED: Must await asynchronous database calls
+    check = await db.table("user_favorites").select("*").eq("stop_id", sid).execute()
     if check.data:
         return {"message": "Already in favorites"}
-        
-    res = engine.supabase.table("user_favorites").insert({"stop_id": sid}).execute()
-    return {"message": "Added to favorites", "data": res.data}
+
+    payload = {"stop_id": sid}
+    if nickname:
+        payload["nickname"] = nickname.strip()[:50]
+    
+    # FIXED: Must await asynchronous database calls
+    res = await db.table("user_favorites").insert(payload).execute()
+    return {"message": "Added", "data": res.data}
+
+@app.put("/favorites/{sid}")
+async def update_favorite(sid: str, nickname: str = Query(...), db = Depends(get_db)):
+    # FIXED: Must await asynchronous database calls
+    res = await db.table("user_favorites") \
+        .update({"nickname": nickname.strip()[:50]}) \
+        .eq("stop_id", sid) \
+        .execute()
+    return {"message": "Updated"}
 
 @app.delete("/favorites/{sid}")
-async def remove_favorite(sid: str):
-    res = engine.supabase.table("user_favorites").delete().eq("stop_id", sid).execute()
-    return {"message": "Removed from favorites"}
+async def remove_favorite(sid: str, db = Depends(get_db)):
+    # FIXED: Must await asynchronous database calls
+    await db.table("user_favorites").delete().eq("stop_id", sid).execute()
+    return {"message": "Deleted"}

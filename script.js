@@ -1,232 +1,161 @@
-
-const API_BASE = "https://bmtc-transit.onrender.com"; // Your Render URL
-const map = L.map('map', { zoomControl: false }).setView([12.97, 77.59], 13);
-
+const API_BASE = "https://bmtc-transit.onrender.com"; 
+const map = L.map('map', { zoomControl: false }).setView([12.97, 77.59], 13);  
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    attribution: '© OpenStreetMap contributors',
     maxZoom: 19,
 }).addTo(map);
 
 let sId = null, eId = null;
-let routeLayers = []; 
-
-const debounceTimers = {};
-function debounce(key, fn, delay = 300) {
-    clearTimeout(debounceTimers[key]);
-    debounceTimers[key] = setTimeout(fn, delay);
-}
+let routeLayers = [];
+const searchTimers = {};
 
 function onSearch(type) {
-    debounce(type, () => search(type));
-}
-
-async function search(type) {
     const q = document.getElementById(type + 'In').value.trim();
     const list = document.getElementById(type + 'List');
-    
-    if (q.length < 2) { 
-        list.classList.remove('open'); 
-        return; 
-    }
+    if (q.length < 2) { list.classList.remove('open'); return; }
 
-    try {
-        const res = await fetch(`${API_BASE}/stops/search?q=${encodeURIComponent(q)}`);
-        const data = await res.json();
-        renderDropdown(type, data);
-    } catch (err) {
-        console.error("Search fetch failed:", err);
-    }
+    clearTimeout(searchTimers[type]);
+    searchTimers[type] = setTimeout(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/stops/search?q=${encodeURIComponent(q)}`);
+            const data = await res.json();
+            list.innerHTML = '';
+            data.forEach(s => {
+                const item = document.createElement('div');
+                item.className = 'dropdown-item';
+                const name = document.createElement('span');
+                name.textContent = s.name;
+                name.onclick = () => {
+                    if (type === 's') sId = s.id; else eId = s.id;
+                    document.getElementById(type + 'In').value = s.name;
+                    list.classList.remove('open');
+                };
+                const fav = document.createElement('button');
+                fav.className = 'mini-fav-btn';
+                fav.textContent = '⭐';
+                fav.onclick = (e) => { e.stopPropagation(); addFav(s.id, s.name); };
+                item.append(name, fav);
+                list.appendChild(item);
+            });
+            list.classList.add('open');
+        } catch(e) { console.error(e); }
+    }, 300);
 }
-
-function renderDropdown(type, stops) {
-    const list = document.getElementById(type + 'List');
-    list.innerHTML = '';
-
-    if (!stops || stops.length === 0) {
-        list.innerHTML = '<div class="dropdown-item" style="color:#ff4d4d">No stops found</div>';
-        list.classList.add('open');
-        return;
-    }
-
-    const seen = new Set();
-    stops.forEach(s => {
-        if (!seen.has(s.name)) {
-            const el = document.createElement('div');
-            el.className = 'dropdown-item';
-            el.textContent = s.name;
-            el.onclick = () => selectStop(type, s.id, s.name);
-            list.appendChild(el);
-            seen.add(s.name);
-        }
-    });
-    list.classList.add('open');
-}
-
-function selectStop(type, id, name) {
-    if (type === 's') sId = id; else eId = id;
-    document.getElementById(type + 'In').value = name;
-    document.getElementById(type + 'List').classList.remove('open');
-}
-
-document.addEventListener('click', e => {
-    if (!e.target.closest('#sidebar')) {
-        document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-    }
-});
 
 async function run() {
-    if (!sId || !eId) return alert("Select stops from dropdown first!");
-    
-    const outDiv = document.getElementById('out');
-    outDiv.innerHTML = '<div style="padding:20px; color:#aaa;">Calculating fastest path...</div>';
-
+    if (!sId || !eId) return alert("Select stops!");
+    const out = document.getElementById('out');
+    out.innerHTML = '<div style="padding:20px;">Finding optimal route...</div>';
     try {
-        // FIXED: Now uses API_BASE instead of localhost
         const res = await fetch(`${API_BASE}/route?start=${sId}&end=${eId}`);
         const data = await res.json();
+        if (data.error) { out.innerHTML = `<div style="padding:20px; color:red;">${data.error}</div>`; return; }
 
-        if (data.error) {
-            outDiv.innerHTML = `<div style="padding:20px; color:#ff4d4d; font-weight:bold;">❌ ${data.error}</div>`;
-            return; 
-        }
-
-        renderResult(data);
-        drawRoute(data);
-
-    } catch (e) {
-        console.error("Routing failed:", e);
-        outDiv.innerHTML = `<div style="padding:20px; color:red;">❌ Server unreachable. Checking connection...</div>`;
-    }
-}
-
-function renderResult(data) {
-    const out = document.getElementById('out');
-    const firstLeg = data.legs[0];
-    const lastLeg = data.legs[data.legs.length - 1];
-
-    let html = `
-        <div class="route-header">
-            <div class="route-number">${firstLeg.route || 'Bus'}</div>
-            <div class="route-title">
-                ${firstLeg.stops[0].name} ⇌ <br>
-                ${lastLeg.stops[lastLeg.stops.length-1].name}
+        out.innerHTML = `
+            <div class="route-header">
+                <div class="route-number">${data.legs[0].route || 'Bus'}</div>
+                <div class="route-title">${data.legs[0].stops[0].name} ⇌ ${data.legs.at(-1).stops.at(-1).name}</div>
             </div>
-        </div>
-        <div class="summary-bar">
-            <div class="stat-card"><div class="stat-value">${data.total_time}</div><div class="stat-label">Mins</div></div>
-            <div class="stat-card"><div class="stat-value">${data.total_stops}</div><div class="stat-label">Stops</div></div>
-            <div class="stat-card"><div class="stat-value">${data.transfers || 0}</div><div class="stat-label">Transfers</div></div>
-        </div>
-        <div class="timeline-container">
-    `;
-
-    data.legs.forEach(leg => {
-        leg.stops.forEach((stop, i) => {
-            const isFirst = i === 0;
-            html += `
-                <div class="stop-row">
-                    <div style="font-weight:${isFirst ? 'bold' : 'normal'}; color:${isFirst ? '#fff' : '#ccc'}">
-                        ${stop.name}
-                        ${isFirst && leg.type === 'bus' ? `<br><span class="route-badge">BUS ${leg.route}</span>` : ''}
-                        ${isFirst && leg.type === 'walk' ? `<br><span class="route-badge" style="background:#ffc107">🚶 Walk</span>` : ''}
+            <div class="summary-bar">
+                <div class="stat-card"><div class="stat-value">${data.total_time}</div><div class="stat-label">Mins</div></div>
+                <div class="stat-card"><div class="stat-value">${data.total_stops}</div><div class="stat-label">Stops</div></div>
+                <div class="stat-card"><div class="stat-value">${data.transfers}</div><div class="stat-label">Transfers</div></div>
+            </div>
+            <div class="timeline-container">
+                ${data.legs.flatMap(l => l.stops.map((s, i) => `
+                    <div class="stop-row" style="${i===0?'font-weight:bold;color:#fff':''}">
+                        ${s.name}
+                        ${i===0?`<br><span class="route-badge" style="background:${l.type==='bus'?'#22c55e':'#f97316'}">${l.type.toUpperCase()} ${l.route||''}</span>`:''}
                     </div>
-                </div>`;
-        });
-    });
+                `)).join('')}
+            </div>
+        `;
 
-    html += `</div>`;
-    out.innerHTML = html;
-}
-
-async function drawRoute(data) {
-    routeLayers.forEach(layer => map.removeLayer(layer));
-    routeLayers = [];
-
-    const allStops = data.legs.flatMap(leg => leg.stops);
-    
-    for (const leg of data.legs) {
-        const color = leg.type === 'bus' ? '#22c55e' : '#ffc107';
-        
-        const coordsStr = leg.stops.map(s => `${s.lng},${s.lat}`).join(';');
-        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
-
-        try {
-            const res = await fetch(osrmUrl);
-            const rData = await res.json();
-            const coords = rData.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-            const poly = L.polyline(coords, { color: color, weight: 6, opacity: 0.8 }).addTo(map);
-            routeLayers.push(poly);
-        } catch (e) {
-
-            const line = L.polyline(leg.stops.map(s => [s.lat, s.lng]), { color: color, weight: 4, dashArray: '5,10' }).addTo(map);
-            routeLayers.push(line);
+        routeLayers.forEach(l => map.removeLayer(l));
+        routeLayers = [];
+        const stops = data.legs.flatMap(l => l.stops);
+        for (const leg of data.legs) {
+            let pts = leg.stops;
+            if (pts.length > 20) pts = pts.filter((_, i) => i % Math.ceil(pts.length/15) === 0 || i === pts.length-1);
+            const url = `https://router.project-osrm.org/route/v1/driving/${pts.map(p => `${p.lng},${p.lat}`).join(';')}?overview=full&geometries=geojson`;
+            try {
+                const r = await fetch(url);
+                const d = await r.json();
+                const poly = L.polyline(d.routes[0].geometry.coordinates.map(c => [c[1], c[0]]), { color: leg.type==='bus'?'#22c55e':'#ffc107', weight: 6 }).addTo(map);
+                routeLayers.push(poly);
+            } catch(e) {
+                const poly = L.polyline(leg.stops.map(s => [s.lat, s.lng]), { color: '#666', dashArray: '5,5' }).addTo(map);
+                routeLayers.push(poly);
+            }
         }
+        stops.forEach((s, i) => {
+            const m = L.circleMarker([s.lat, s.lng], { radius: 5, color: '#000', fillColor: i === 0 ? '#22c55e' : '#fff', fillOpacity: 1 }).addTo(map);
+            m.bindTooltip(s.name);
+            routeLayers.push(m);
+        });
+        map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] });
+    } catch(e) { out.innerHTML = "Error loading journey."; }
+}
+
+async function loadFavs() {
+    try {
+        const res = await fetch(`${API_BASE}/favorites`);
+        const data = await res.json();
+        const list = document.getElementById('favorites-list');
+        list.innerHTML = '';
+        data.forEach(f => {
+            const item = document.createElement('div');
+            item.className = 'fav-item';
+            const info = document.createElement('div');
+            info.className = 'fav-info';
+            info.onclick = () => {
+                if (!sId) { sId = f.stop_id; document.getElementById('sIn').value = f.stops.stop_name; }
+                else { eId = f.stop_id; document.getElementById('eIn').value = f.stops.stop_name; }
+            };
+            const nick = document.createElement('div');
+            nick.className = 'fav-nickname';
+            nick.textContent = f.nickname || 'Saved Spot';
+            const sname = document.createElement('div');
+            sname.className = 'fav-stopname';
+            sname.textContent = f.stops.stop_name;
+            info.append(nick, sname);
+
+            const acts = document.createElement('div');
+            const edit = document.createElement('button');
+            edit.className = 'fav-btn';
+            edit.textContent = '✎';
+            edit.onclick = (e) => { e.stopPropagation(); editFav(f.stop_id, f.nickname); };
+            const del = document.createElement('button');
+            del.className = 'fav-btn';
+            del.textContent = '×';
+            del.style.color = '#ff4d4d';
+            del.onclick = (e) => { e.stopPropagation(); delFav(f.stop_id); };
+            acts.append(edit, del);
+            item.append(info, acts);
+            list.appendChild(item);
+        });
+    } catch(e) { console.error("Favs load error:", e); }
+}
+
+async function addFav(sid, name) {
+    const nick = prompt(`Label for ${name}:`);
+    if (nick === null) return;
+    await fetch(`${API_BASE}/favorites/${sid}?nickname=${encodeURIComponent(nick)}`, { method: 'POST' });
+    loadFavs();
+}
+
+async function editFav(sid, old) {
+    const nick = prompt("New label:", old || "");
+    if (nick === null) return;
+    await fetch(`${API_BASE}/favorites/${sid}?nickname=${encodeURIComponent(nick)}`, { method: 'PUT' });
+    loadFavs();
+}
+
+async function delFav(sid) {
+    if (confirm("Remove bookmark?")) {
+        await fetch(`${API_BASE}/favorites/${sid}`, { method: 'DELETE' });
+        loadFavs();
     }
-
-    allStops.forEach((stop, i) => {
-        const isEnd = i === 0 || i === allStops.length - 1;
-        const m = L.circleMarker([stop.lat, stop.lng], {
-            radius: isEnd ? 7 : 4,
-            fillColor: i === 0 ? '#22c55e' : (i === allStops.length - 1 ? '#f97316' : '#fff'),
-            color: '#000', weight: 2, fillOpacity: 1
-        }).addTo(map);
-        m.bindTooltip(stop.name);
-        routeLayers.push(m);
-
-    });
- 
-
-    map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] });
 }
 
-
-async function loadFavorites() {
-    const res = await fetch(`${API_BASE}/favorites`);
-    const favorites = await res.json();
-    
-    const container = document.getElementById('favorites-list');
-    if (favorites.length === 0) {
-        container.innerHTML = '<small style="color:#666">No bookmarks yet</small>';
-        return;
-    }
-
-    container.innerHTML = favorites.map(f => `
-        <div class="fav-item">
-            <span onclick="setFromFav('${f.stop_id}', '${f.stops.stop_name}')">${f.stops.stop_name}</span>
-            <button onclick="toggleFav('${f.stop_id}', true)" style="background:none; border:none; color:#ff4d4d; cursor:pointer;">×</button>
-        </div>
-    `).join('');
-}
-
-async function toggleFav(sid, isDelete = false) {
-    const method = isDelete ? 'DELETE' : 'POST';
-    const res = await fetch(`${API_BASE}/favorites/${sid}`, { method: method });
-    const data = await res.json();
-    console.log(data.message);
-    loadFavorites(); // Refresh list
-}
-
-function setFromFav(id, name) {
-    if (!sId) {
-        sId = id;
-        document.getElementById('sIn').value = name;
-    } else {
-        eId = id;
-        document.getElementById('eIn').value = name;
-    }
-}
-
-
-
-function prefillStop(id, name) {
-    if (!sId) { sId = id; document.getElementById('sIn').value = name; }
-    else { eId = id; document.getElementById('eIn').value = name; }
-}
-
-function escHtml(str) {
-    return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function escAttr(str) {
-    return String(str ?? '').replace(/"/g, '&quot;');
-}
+window.onload = loadFavs;
