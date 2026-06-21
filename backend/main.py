@@ -8,7 +8,6 @@ import logging
 from typing import Optional
 from dotenv import load_dotenv
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -32,12 +31,8 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"GLOBAL CRASH: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"message": "Internal Server Error", "detail": str(exc)},
-        headers={"Access-Control-Allow-Origin": "*"}
-    )
+    logger.error(f"Global Crash: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": str(exc)}, headers={"Access-Control-Allow-Origin": "*"})
 
 def get_db():
     if engine.supabase is None: raise HTTPException(status_code=503)

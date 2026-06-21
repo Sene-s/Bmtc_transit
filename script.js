@@ -35,21 +35,16 @@ function onSearch(type) {
                 list.appendChild(item);
             });
             list.classList.add('open');
-        } catch(e) {}
+        } catch(e) { console.error(e); }
     }, 300);
 }
 
 async function run() {
     if (!sId || !eId) return alert("Select both stops!");
     const out = document.getElementById('out');
-    out.innerHTML = '<div style="padding:20px; color:#aaa;">Calculating journey...</div>';
+    out.innerHTML = '<div style="padding:20px; color:#aaa;">Searching network...</div>';
     try {
         const res = await fetch(`${API_BASE}/route?start=${sId}&end=${eId}`);
-        if (!res.ok) {
-            const err = await res.json();
-            out.innerHTML = `<div style="padding:20px; color:red;">Server Error: ${err.detail || 'Internal Crash'}</div>`;
-            return;
-        }
         const data = await res.json();
         if (data.error) { out.innerHTML = `<div style="padding:20px; color:red;">${data.error}</div>`; return; }
 
@@ -95,36 +90,42 @@ async function run() {
                 routeLayers.push(m);
             });
         }
-        setTimeout(() => map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] }), 500);
-    } catch(e) { out.innerHTML = "Server connection failed."; }
+        setTimeout(() => { if (routeLayers.length) map.fitBounds(L.featureGroup(routeLayers).getBounds(), { padding: [40, 40] }); }, 500);
+    } catch(e) { out.innerHTML = "Backend connection failed."; }
 }
 
 async function loadFavs() {
-    const res = await fetch(`${API_BASE}/favorites`);
-    const data = await res.json();
-    const list = document.getElementById('favorites-list');
-    list.innerHTML = '';
-    data.forEach(f => {
-        const item = document.createElement('div');
-        item.className = 'fav-item';
-        const info = document.createElement('div');
-        info.className = 'fav-info';
-        const nick = document.createElement('div');
-        nick.className = 'fav-nickname';
-        nick.textContent = f.nickname || 'Saved Spot';
-        const sname = document.createElement('div');
-        sname.className = 'fav-stopname';
-        sname.textContent = f.stops.stop_name;
-        info.append(nick, sname);
+    try {
+        const res = await fetch(`${API_BASE}/favorites`);
+        const data = await res.json();
+        const list = document.getElementById('favorites-list');
+        list.innerHTML = '';
+        data.forEach(f => {
+            const item = document.createElement('div');
+            item.className = 'fav-item';
+            const info = document.createElement('div');
+            info.className = 'fav-info';
+            info.onclick = () => {
+                if (!sId) { sId = f.stop_id; document.getElementById('sIn').value = f.stops.stop_name; }
+                else { eId = f.stop_id; document.getElementById('eIn').value = f.stops.stop_name; }
+            };
+            const nick = document.createElement('div');
+            nick.className = 'fav-nickname';
+            nick.textContent = f.nickname || 'Saved Spot';
+            const sname = document.createElement('div');
+            sname.className = 'fav-stopname';
+            sname.textContent = f.stops.stop_name;
+            info.append(nick, sname);
 
-        const acts = document.createElement('div');
-        const sBtn = document.createElement('button'); sBtn.textContent = 'S'; sBtn.onclick = () => { sId = f.stop_id; document.getElementById('sIn').value = f.stops.stop_name; };
-        const eBtn = document.createElement('button'); eBtn.textContent = 'E'; eBtn.onclick = () => { eId = f.stop_id; document.getElementById('eIn').value = f.stops.stop_name; };
-        const del = document.createElement('button'); del.textContent = '×'; del.style.color='red'; del.onclick = () => delFav(f.stop_id);
-        acts.append(sBtn, eBtn, del);
-        item.append(info, acts);
-        list.appendChild(item);
-    });
+            const acts = document.createElement('div');
+            const sBtn = document.createElement('button'); sBtn.textContent = 'S'; sBtn.onclick = () => { sId = f.stop_id; document.getElementById('sIn').value = f.stops.stop_name; };
+            const eBtn = document.createElement('button'); eBtn.textContent = 'E'; eBtn.onclick = () => { eId = f.stop_id; document.getElementById('eIn').value = f.stops.stop_name; };
+            const del = document.createElement('button'); del.textContent = '×'; del.style.color='red'; del.onclick = () => delFav(f.stop_id);
+            acts.append(sBtn, eBtn, del);
+            item.append(info, acts);
+            list.appendChild(item);
+        });
+    } catch(e) {}
 }
 
 async function addFav(sid, name) {
